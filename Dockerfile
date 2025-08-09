@@ -12,7 +12,8 @@ RUN pip install uv
 
 # Install dependencies
 # If you use requirements.txt
-RUN uv pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
 
 # Or if you use pyproject.toml
 # RUN uv pip install .
