@@ -1,1 +1,1 @@
-web: uv run python mcp_starter.py
+web: uv run python mcp-bearer-token/mcp_starter.py
