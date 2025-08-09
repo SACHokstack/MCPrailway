@@ -1,17 +1,24 @@
 import asyncio
 from typing import Annotated
 import os
+from threading import Thread
+from flask import Flask
 from dotenv import load_dotenv
+import finnhub
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
 from mcp import ErrorData, McpError
 from mcp.server.auth.provider import AccessToken
 from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
 from pydantic import BaseModel, Field, AnyUrl
-
 import markdownify
 import httpx
 import readabilipy
+from langchain_community.utilities import ArxivAPIWrapper
+from langchain_community.tools import ArxivQueryRun
+import akinator
+import sys
+sys.path.append(os.path.dirname(__file__))  # Add current directory to path
 
 # --- Load environment variables ---
 load_dotenv()
@@ -202,11 +209,267 @@ async def make_img_black_and_white(
         return [ImageContent(type="image", mimeType="image/png", data=bw_base64)]
     except Exception as e:
         raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
+    
 
-# --- Run MCP Server ---
-async def main():
+# --- Tool: Stock Price ---
+# Setup Finnhub client
+finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
+
+StockPriceDescription = RichToolDescription(
+    description="Live stock price tool: fetches the latest market price for a given stock symbol.",
+    use_when="Use this when you need the current price of a stock using its ticker symbol.",
+    side_effects="Returns the latest market price in USD from Finnhub.",
+)
+
+@mcp.tool(description=StockPriceDescription.model_dump_json())
+async def get_live_stock_price(
+    symbol: Annotated[str, Field(description="The stock ticker symbol, e.g., AAPL for Apple, TSLA for Tesla")]
+) -> str:
+    """
+    Fetches the current live price of the given stock symbol from Finnhub.
+    """
+    try:
+        quote = finnhub_client.quote(symbol)
+        current_price = quote.get("c")  # 'c' = current price in Finnhub API
+
+        if current_price is None:
+            raise McpError(
+                ErrorData(code=INVALID_PARAMS, message=f"Could not fetch live price for symbol: {symbol}")
+            )
+
+        return f"💹 **{symbol}** — Current Price: **${current_price}**"
+
+    except Exception as e:
+        raise McpError(
+            ErrorData(code=INTERNAL_ERROR, message=f"Error fetching stock price: {str(e)}")
+        )
+
+
+api_wrapper_arxiv = ArxivAPIWrapper(top_k_results=5, doc_content_chars_max=510)
+arxiv_tool = ArxivQueryRun(api_wrapper=api_wrapper_arxiv, description='Query Arxiv Papers')
+
+ArxivDescription = RichToolDescription(
+    description="Arxiv paper search: query scientific papers from arXiv by topic, keywords, or authors.",
+    use_when=(
+    "Use this ONLY for queries requesting academic research papers, scholarly articles, "
+    "scientific publications, or abstracts — especially when the request mentions 'paper', 'papers', "
+    "'research', 'study', 'NLP research', 'transformers research', or 'arxiv'. "
+    "DO NOT use web search for these queries. "
+    "Use when a game is mentioned in the user query. "
+    "Always use this tool instead of general search."),
+    side_effects="Returns relevant paper titles, abstracts, and links.",
+)
+
+@mcp.tool(name="academic_paper_search", description=ArxivDescription.model_dump_json())
+async def query_arxiv(
+    query: Annotated[str, Field(description="Your search query for arXiv, e.g., 'transformers in NLP'")]
+) -> str:
+    """
+    Queries the arXiv API for papers matching the given query and returns the results.
+    """
+    try:
+        result = arxiv_tool.run(query)  # synchronous call inside async function
+        return f"📚 **Arxiv Results for:** _{query}_\n\n{result}"
+    except Exception as e:
+        return f"Error fetching Arxiv papers: {e}"
+    
+
+
+
+import akinator
+
+# Global game state
+aki_instance = None
+
+@mcp.tool(description="Play Akinator - the character guessing game")
+async def play_akinator(
+    user_answer: Annotated[str, Field(description="Your answer: start/y/n/i/p/pn/b/exit")]
+) -> str:
+    global aki_instance
+    
+    user_input = user_answer.strip().lower()
+    
+    # Exit game
+    if user_input == "exit":
+        aki_instance = None
+        return "👋 Game exited. Thanks for playing!"
+    
+    # Start new game
+    if user_input == "start":
+        aki_instance = akinator.Akinator()
+        aki_instance.start_game()
+        return f"🎮 Game Started!\n\nQuestion: {str(aki_instance)}\n\nAnswers: [y]es/[n]o/[i] don't know/[p]robably/[pn] probably not/[b]ack/[exit]"
+    
+    # No active game
+    if aki_instance is None:
+        return "No game active. Type 'start' to begin or 'exit' to quit."
+    
+    # Game finished
+    if aki_instance.finished:
+        result = (f"🏆 Game Over!\n\n"
+                 f"Proposition: {aki_instance.name_proposition}\n"
+                 f"Description: {aki_instance.description_proposition}\n"
+                 f"Photo: {aki_instance.photo}\n"
+                 f"Final Message: {aki_instance.question}")
+        aki_instance = None
+        return result
+    
+    # Go back
+    if user_input == "b":
+        try:
+            aki_instance.back()
+            return f"↩️ Went back.\n\nQuestion: {str(aki_instance)}"
+        except akinator.CantGoBackAnyFurther:
+            return "⚠️ You can't go back any further!\n\nQuestion: {str(aki_instance)}"
+    
+    # Answer question
+    try:
+        aki_instance.answer(user_input)
+        if aki_instance.finished:
+            result = (f"🏆 Game Over!\n\n"
+                     f"Proposition: {aki_instance.name_proposition}\n"
+                     f"Description: {aki_instance.description_proposition}\n"
+                     f"Photo: {aki_instance.photo}\n"
+                     f"Final Message: {aki_instance.question}")
+            aki_instance = None
+            return result
+        else:
+            return f"Question: {str(aki_instance)}"
+    except akinator.InvalidChoiceError:
+        return f"⚠️ Invalid answer. Please try again.\n\nQuestion: {str(aki_instance)}\n\nAnswers: [y]es/[n]o/[i] don't know/[p]robably/[pn] probably not/[b]ack/[exit]"
+    
+
+# Traffic tool with inline implementation
+import requests
+import time
+from typing import Optional, Dict
+
+@mcp.tool(description="Get traffic updates between two locations")
+async def get_traffic_update(
+    query: Annotated[str, Field(description="Traffic query: 'from A to B' or 'A|B'")]
+) -> str:
+    
+    def geocode(location: str) -> Optional[Dict]:
+        """Simple geocoding function"""
+        try:
+            time.sleep(1)  # Rate limiting
+            url = "https://nominatim.openstreetmap.org/search"
+            params = {
+                'q': location,
+                'format': 'json',
+                'limit': 1
+            }
+            headers = {'User-Agent': 'TrafficBot/1.0'}
+            
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            data = response.json()
+            
+            if data:
+                return {
+                    'lat': float(data[0]['lat']),
+                    'lon': float(data[0]['lon'])
+                }
+            return None
+        except:
+            return None
+    
+    def get_route(origin_coords: Dict, dest_coords: Dict) -> Optional[Dict]:
+        """Simple routing function"""
+        try:
+            origin = f"{origin_coords['lon']},{origin_coords['lat']}"
+            dest = f"{dest_coords['lon']},{dest_coords['lat']}"
+            
+            url = f"http://router.project-osrm.org/route/v1/driving/{origin};{dest}"
+            response = requests.get(url, timeout=10)
+            data = response.json()
+            
+            if data['code'] == 'Ok' and data['routes']:
+                route = data['routes'][0]
+                return {
+                    'distance': route['distance'],
+                    'duration': route['duration']
+                }
+            return None
+        except:
+            return None
+    
+    try:
+        # Parse query
+        if " to " in query.lower():
+            parts = query.lower().split(" to ")
+            origin = parts[0].replace("from ", "").strip()
+            destination = parts[1].strip()
+        elif "|" in query:
+            parts = query.split("|")
+            origin = parts[0].strip()
+            destination = parts[1].strip()
+        else:
+            return "❌ Use format: 'from A to B' or 'A|B'"
+        
+        # Get coordinates
+        origin_coords = geocode(origin)
+        if not origin_coords:
+            return f"❌ Location not found: {origin}"
+        
+        dest_coords = geocode(destination)
+        if not dest_coords:
+            return f"❌ Location not found: {destination}"
+        
+        # Get route
+        route = get_route(origin_coords, dest_coords)
+        if not route:
+            return "❌ Could not calculate route"
+        
+        # Format response
+        distance_km = route['distance'] / 1000
+        duration_min = route['duration'] / 60
+        
+        # Simple traffic estimate
+        expected_speed = 40  # km/h
+        expected_time = (distance_km / expected_speed) * 60
+        
+        if duration_min <= expected_time * 1.2:
+            traffic = "🟢 Light traffic"
+        elif duration_min <= expected_time * 1.6:
+            traffic = "🟡 Moderate traffic"
+        else:
+            traffic = "🔴 Heavy traffic"
+        
+        return f"""🚗 Traffic Update
+
+📍 {origin.title()} → {destination.title()}
+📏 Distance: {distance_km:.1f} km
+⏱️ Duration: {duration_min:.0f} minutes
+{traffic}"""
+        
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
+# --- Original MCP main function ---
+async def mcp_main():
     print("🚀 Starting MCP server on http://0.0.0.0:8086")
     await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
+# --- Flask app wrapper ---
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def home():
+    return "✅ MCP Server is running on Railway!"
+
+@flask_app.route("/health")
+def health():
+    return {"status": "healthy", "service": "MCP Server"}
+
+# --- Run MCP server in background ---
+def run_mcp():
+    asyncio.run(mcp_main())  # Calls your existing main()
+
+# --- Entry point ---
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Start MCP server in separate thread
+    Thread(target=run_mcp, daemon=True).start()
+    
+    # Run Flask web server (Railway will use this)
+    port = int(os.environ.get("PORT", 8000))
+    flask_app.run(host="0.0.0.0", port=port)
