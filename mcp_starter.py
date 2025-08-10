@@ -453,8 +453,8 @@ async def get_traffic_update(
 
 # --- Original MCP main function ---
 async def mcp_main():
-    print("🚀 Starting MCP server on http://0.0.0.0:8086")
-    await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
+    print("🚀 Starting MCP server on http://127.0.0.1:8086")
+    await mcp.run_async("streamable-http", host="127.0.0.1", port=8086)
 
 # --- Flask app wrapper ---
 flask_app = Flask(__name__)
