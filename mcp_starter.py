@@ -2,7 +2,7 @@ import asyncio
 from typing import Annotated
 import os
 from threading import Thread
-from flask import Flask, request, Response, stream_with_context
+from flask import Flask, request, Response, stream_with_context, redirect
 from dotenv import load_dotenv
 import finnhub
 from fastmcp import FastMCP
@@ -23,11 +23,17 @@ sys.path.append(os.path.dirname(__file__))  # Add current directory to path
 # --- Load environment variables ---
 load_dotenv()
 
-TOKEN = os.environ.get("AUTH_TOKEN")
-MY_NUMBER = os.environ.get("MY_NUMBER")
+TOKEN = os.environ.get("AUTH_TOKEN") or "dev-token"
+MY_NUMBER = os.environ.get("MY_NUMBER") or "0"
 
-assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
-assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
+MISSING_CONFIG = {
+    "AUTH_TOKEN": os.environ.get("AUTH_TOKEN") is None,
+    "MY_NUMBER": os.environ.get("MY_NUMBER") is None,
+}
+
+if MISSING_CONFIG["AUTH_TOKEN"] or MISSING_CONFIG["MY_NUMBER"]:
+    print("⚠️ Warning: Missing env vars — using defaults:",
+          {k: v for k, v in MISSING_CONFIG.items() if v}, flush=True)
 
 # --- Auth Provider ---
 class SimpleBearerAuthProvider(BearerAuthProvider):
@@ -455,11 +461,16 @@ flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
-    return "✅ MCP Server is running on Railway!"
+    # Redirect root to MCP endpoint to support clients probing base URL
+    return redirect("/mcp/", code=308)
 
 @flask_app.route("/health")
 def health():
-    return {"status": "healthy", "service": "MCP Server"}
+    return {
+        "status": "healthy",
+        "service": "MCP Server",
+        "missing_config": MISSING_CONFIG,
+    }
 
 # --- Reverse proxy to expose internal MCP server on public port without redirects ---
 @flask_app.route("/mcp", methods=["GET", "POST", "OPTIONS"])
