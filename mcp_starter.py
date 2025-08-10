@@ -2,7 +2,7 @@ import asyncio
 from typing import Annotated
 import os
 from threading import Thread
-from flask import Flask
+from flask import Flask, request, Response, stream_with_context
 from dotenv import load_dotenv
 import finnhub
 from fastmcp import FastMCP
@@ -460,6 +460,46 @@ def home():
 @flask_app.route("/health")
 def health():
     return {"status": "healthy", "service": "MCP Server"}
+
+# --- Reverse proxy to expose internal MCP server on public port without redirects ---
+@flask_app.route("/mcp", methods=["GET", "POST", "OPTIONS"])
+@flask_app.route("/mcp/", defaults={"subpath": ""}, methods=["GET", "POST", "OPTIONS"])
+@flask_app.route("/mcp/<path:subpath>", methods=["GET", "POST", "OPTIONS"])
+def mcp_proxy(subpath: str | None = None):
+    """
+    Proxies requests from public /mcp[...] to the internal FastMCP server on 127.0.0.1:8086/mcp/[...]
+    - Avoids 307 redirects to http by terminating HTTPS at Flask and forwarding internally.
+    - Preserves streaming responses (e.g., event streams) via generator.
+    """
+    import requests  # local import to avoid any top-level import ordering issues
+
+    target_base = "http://127.0.0.1:8086/mcp/"
+    target_url = target_base + (subpath or "")
+
+    # Forward headers except hop-by-hop and host-specific
+    excluded = {"host", "content-length", "connection", "accept-encoding"}
+    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in excluded}
+
+    # Forward request to internal MCP server
+    resp = requests.request(
+        method=request.method,
+        url=target_url,
+        params=request.args,
+        data=request.get_data(),
+        headers=fwd_headers,
+        stream=True,
+    )
+
+    # Build proxied response, excluding hop-by-hop headers
+    excluded_resp = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+    response_headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded_resp]
+
+    def generate():
+        for chunk in resp.iter_content(chunk_size=8192):
+            if chunk:
+                yield chunk
+
+    return Response(stream_with_context(generate()), status=resp.status_code, headers=response_headers)
 
 # --- Run MCP server in background ---
 def run_mcp():
