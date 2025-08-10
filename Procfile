@@ -1,1 +1,1 @@
-web: uv run python mcp_starter.py
+web: python mcp_starter.py

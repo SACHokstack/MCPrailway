@@ -1,0 +1,25 @@
+Flask==3.0.3
+python-dotenv==1.1.0
+fastmcp==2.8.1
+mcp==1.9.4
+httpx==0.28.1
+readabilipy==0.3.0
+markdownify==1.1.0
+langchain-community==0.3.23
+langchain-core==0.3.68
+beautifulsoup4==4.12.3
+pillow==10.4.0
+requests==2.32.3
+# Correct package name for finnhub Python client
+finnhub-python
+# Akinator library (import name: akinator)
+akinator.py
+# Explicit pins to match libs used by dependencies
+pydantic==2.10.6
+typing_extensions==4.12.2
+arxiv==2.2.0
+lxml==5.4.0
+fastapi==0.115.7
+starlette==0.45.3
+sse-starlette==2.3.6
+uvicorn==0.34.0
