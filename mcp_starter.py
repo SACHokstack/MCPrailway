@@ -282,67 +282,75 @@ async def query_arxiv(
 
 
 
-import akinator
+# Simple guessing game implementation
+import random
 
-# Global game state
-aki_instance = None
+# Game state
+game_active = False
+questions_asked = 0
+character_list = [
+    "Mario", "Pikachu", "Batman", "Superman", "Spider-Man", 
+    "Harry Potter", "Darth Vader", "Mickey Mouse", "Sonic", "Link"
+]
+current_character = None
 
-@mcp.tool(description="Play Akinator - the character guessing game")
-async def play_akinator(
-    user_answer: Annotated[str, Field(description="Your answer: start/y/n/i/p/pn/b/exit")]
+@mcp.tool(description="Simple guessing game - think of a character and I'll try to guess!")
+async def play_guessing_game(
+    user_answer: Annotated[str, Field(description="Your answer: start/yes/no/exit")]
 ) -> str:
-    global aki_instance
+    global game_active, questions_asked, current_character
     
     user_input = user_answer.strip().lower()
     
     # Exit game
     if user_input == "exit":
-        aki_instance = None
-        return "👋 Game exited. Thanks for playing!"
+        game_active = False
+        return "👋 Game ended. Thanks for playing!"
     
     # Start new game
     if user_input == "start":
-        aki_instance = akinator.Akinator()
-        aki_instance.start_game()
-        return f"🎮 Game Started!\n\nQuestion: {str(aki_instance)}\n\nAnswers: [y]es/[n]o/[i] don't know/[p]robably/[pn] probably not/[b]ack/[exit]"
+        game_active = True
+        questions_asked = 0
+        return "🎮 Think of any famous character!\n\nI'll try to guess who it is. Ready? Is your character a superhero? (yes/no/exit)"
     
     # No active game
-    if aki_instance is None:
-        return "No game active. Type 'start' to begin or 'exit' to quit."
+    if not game_active:
+        return "No game active. Type 'start' to begin!"
     
-    # Game finished
-    if aki_instance.finished:
-        result = (f"🏆 Game Over!\n\n"
-                 f"Proposition: {aki_instance.name_proposition}\n"
-                 f"Description: {aki_instance.description_proposition}\n"
-                 f"Photo: {aki_instance.photo}\n"
-                 f"Final Message: {aki_instance.question}")
-        aki_instance = None
-        return result
+    # Simple question flow
+    questions_asked += 1
     
-    # Go back
-    if user_input == "b":
-        try:
-            aki_instance.back()
-            return f"↩️ Went back.\n\nQuestion: {str(aki_instance)}"
-        except akinator.CantGoBackAnyFurther:
-            return "⚠️ You can't go back any further!\n\nQuestion: {str(aki_instance)}"
-    
-    # Answer question
-    try:
-        aki_instance.answer(user_input)
-        if aki_instance.finished:
-            result = (f"🏆 Game Over!\n\n"
-                     f"Proposition: {aki_instance.name_proposition}\n"
-                     f"Description: {aki_instance.description_proposition}\n"
-                     f"Photo: {aki_instance.photo}\n"
-                     f"Final Message: {aki_instance.question}")
-            aki_instance = None
-            return result
+    if questions_asked == 1:
+        if user_input == "yes":
+            return "🦸 Is your character from Marvel or DC comics? (yes for Marvel, no for DC)"
         else:
-            return f"Question: {str(aki_instance)}"
-    except akinator.InvalidChoiceError:
-        return f"⚠️ Invalid answer. Please try again.\n\nQuestion: {str(aki_instance)}\n\nAnswers: [y]es/[n]o/[i] don't know/[p]robably/[pn] probably not/[b]ack/[exit]"
+            return "🎭 Is your character from a video game? (yes/no)"
+    
+    elif questions_asked == 2:
+        return "🤔 Is your character the main protagonist of their story? (yes/no)"
+    
+    elif questions_asked == 3:
+        # Make a random guess
+        current_character = random.choice(character_list)
+        return f"🎯 I think your character is... **{current_character}**! Am I right? (yes/no)"
+    
+    elif questions_asked == 4:
+        if user_input == "yes":
+            game_active = False
+            return f"🎉 Yay! I guessed correctly! It was {current_character}! \n\nType 'start' to play again."
+        else:
+            # Make another guess
+            character_list.remove(current_character) if current_character in character_list else None
+            if character_list:
+                current_character = random.choice(character_list)
+                return f"🤔 Hmm, let me try again... Is it **{current_character}**? (yes/no)"
+            else:
+                game_active = False
+                return "😅 You got me! I give up. You win! Type 'start' to play again."
+    
+    else:
+        game_active = False
+        return "🏆 You win! I couldn't guess your character. Type 'start' to play again!"
     
 
 # Traffic tool with inline implementation
@@ -451,6 +459,159 @@ async def get_traffic_update(
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
+        
+
+# --- Tool: Flight Tracking ---
+FlightTrackingDescription = RichToolDescription(
+    description="Real-time flight tracking: look up flight details by IATA flight number.",
+    use_when="Use this when the user asks about flight status, delays, or wants to track a specific flight using its flight number.",
+    side_effects="Returns current flight status, departure/arrival times, and airport information from AviationStack API.",
+)
+
+@mcp.tool(description=FlightTrackingDescription.model_dump_json())
+async def get_flight_info(
+    flight_number: Annotated[str, Field(description="IATA flight number (e.g., 'AA100', 'DL123')")]
+) -> str:
+    """Fetches real-time flight details from AviationStack API."""
+    API_BASE = "https://api.aviationstack.com/v1"
+    API_KEY = os.environ.get("AVIATIONSTACK_API_KEY") or "29047b2661148386e5e0fb09c1ca83e6"
+    
+    url = f"{API_BASE}/flights"
+    params = {
+        "access_key": API_KEY,
+        "flight_iata": flight_number
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+        
+        if not data.get("data"):
+            return f"✈️ No flight data found for **{flight_number}**. Please check the flight number format (e.g., AA100, DL123)."
+        
+        flight = data["data"][0]
+        airline = flight.get("airline", {}).get("name", "Unknown Airline")
+        departure = flight.get("departure", {}).get("airport", "Unknown Departure")
+        arrival = flight.get("arrival", {}).get("airport", "Unknown Arrival")
+        status = flight.get("flight_status", "Unknown Status")
+        dep_time = flight.get("departure", {}).get("estimated", "N/A")
+        arr_time = flight.get("arrival", {}).get("estimated", "N/A")
+        
+        # Format status with emoji
+        status_emoji = {
+            "scheduled": "🕐",
+            "active": "✈️", 
+            "landed": "🛬",
+            "cancelled": "❌",
+            "delayed": "⏰"
+        }.get(status.lower(), "📋")
+        
+        return (
+            f"✈️ **Flight {flight_number}** ({airline})\n\n"
+            f"{status_emoji} **Status**: {status.title()}\n"
+            f"🛫 **From**: {departure}\n"
+            f"🛬 **To**: {arrival}\n"
+            f"📅 **Departure**: {dep_time}\n"
+            f"📅 **Arrival**: {arr_time}"
+        )
+        
+    except httpx.HTTPError as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch flight data: {str(e)}"))
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Error processing flight data: {str(e)}"))
+
+# --- Tool: Flight Tracking ---
+FlightTrackingDescription = RichToolDescription(
+    description="Track flights and get real-time flight status, delays, departure and arrival information by flight number or route.",
+    use_when="Use this when the user asks to track a flight, check flight status, flight delays, departure/arrival times, or mentions any flight number (e.g. AA100, DL123, etc).",
+    side_effects="Returns current flight status, departure/arrival times, and airport information from AviationStack API.",
+)
+
+@mcp.tool(name="track_flight", description=FlightTrackingDescription.model_dump_json())
+async def track_flight(
+    flight_number: Annotated[str, Field(description="IATA flight number to track (e.g., 'AA100', 'DL123', 'UA456')")]
+) -> str:
+    """Track a flight and get real-time status information."""
+    API_BASE = "https://api.aviationstack.com/v1"
+    API_KEY = os.environ.get("AVIATIONSTACK_API_KEY") or "29047b2661148386e5e0fb09c1ca83e6"
+    
+    # Clean up flight number input
+    flight_number = flight_number.upper().strip()
+    
+    url = f"{API_BASE}/flights"
+    params = {
+        "access_key": API_KEY,
+        "flight_iata": flight_number
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+        
+        if not data.get("data") or len(data["data"]) == 0:
+            return f"✈️ **Flight Tracking Result**\n\nNo active flight data found for **{flight_number}**.\n\nPossible reasons:\n- Flight may not be scheduled today\n- Flight number format incorrect\n- Flight may have completed\n\nTry format: AA100, DL123, UA456, etc."
+        
+        flight = data["data"][0]
+        
+        # Extract flight information with fallbacks
+        airline_info = flight.get("airline", {})
+        airline = airline_info.get("name", "Unknown Airline")
+        
+        departure_info = flight.get("departure", {})
+        arrival_info = flight.get("arrival", {})
+        
+        dep_airport = departure_info.get("airport", "Unknown Departure")
+        arr_airport = arrival_info.get("airport", "Unknown Arrival")
+        
+        status = flight.get("flight_status", "unknown")
+        
+        dep_scheduled = departure_info.get("scheduled", "N/A")
+        dep_estimated = departure_info.get("estimated", dep_scheduled)
+        
+        arr_scheduled = arrival_info.get("scheduled", "N/A") 
+        arr_estimated = arrival_info.get("estimated", arr_scheduled)
+        
+        # Format status with emoji
+        status_emoji = {
+            "scheduled": "🕐",
+            "active": "✈️", 
+            "landed": "🛬",
+            "cancelled": "❌",
+            "delayed": "⏰",
+            "diverted": "🔄",
+            "unknown": "❓"
+        }.get(status.lower(), "📋")
+        
+        result = f"✈️ **Flight Tracking: {flight_number}**\n\n"
+        result += f"🏢 **Airline**: {airline}\n"
+        result += f"{status_emoji} **Status**: {status.title()}\n\n"
+        result += f"🛫 **Departure**\n"
+        result += f"   📍 Airport: {dep_airport}\n"
+        result += f"   📅 Time: {dep_estimated}\n\n"
+        result += f"🛬 **Arrival**\n"
+        result += f"   📍 Airport: {arr_airport}\n"
+        result += f"   📅 Time: {arr_estimated}"
+        
+        return result
+        
+    except httpx.HTTPError as e:
+        return f"❌ **Flight Tracking Error**\n\nFailed to fetch flight data for {flight_number}.\nAPI Error: {str(e)}\n\nPlease try again or check the flight number."
+    except Exception as e:
+        return f"❌ **Flight Tracking Error**\n\nUnexpected error while tracking flight {flight_number}.\nError: {str(e)}"
+
+# Alternative flight tracking tool with different name for better discovery
+@mcp.tool(name="flight_status", description="Get flight status and tracking information")
+async def flight_status(
+    flight: Annotated[str, Field(description="Flight number to check status for (e.g., AA100, DL123)")]
+) -> str:
+    """Alternative flight tracking endpoint."""
+    return await track_flight(flight)
+
+
 # --- Original MCP main function ---
 async def mcp_main():
     print("🚀 Starting MCP server on http://127.0.0.1:8086")
@@ -461,8 +622,7 @@ flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
-    # Redirect root to MCP endpoint to support clients probing base URL
-    return redirect("/mcp/", code=308)
+    return "✅ MCP Server is running on Railway! Use /health for status and /mcp/ for the MCP endpoint."
 
 @flask_app.route("/health")
 def health():
@@ -491,15 +651,19 @@ def mcp_proxy(subpath: str | None = None):
     excluded = {"host", "content-length", "connection", "accept-encoding"}
     fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in excluded}
 
-    # Forward request to internal MCP server
-    resp = requests.request(
-        method=request.method,
-        url=target_url,
-        params=request.args,
-        data=request.get_data(),
-        headers=fwd_headers,
-        stream=True,
-    )
+    # Forward request to internal MCP server (with timeout)
+    try:
+        resp = requests.request(
+            method=request.method,
+            url=target_url,
+            params=request.args,
+            data=request.get_data(),
+            headers=fwd_headers,
+            stream=True,
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        return Response(f"Upstream MCP not ready: {e}", status=503)
 
     # Build proxied response, excluding hop-by-hop headers
     excluded_resp = {"content-encoding", "content-length", "transfer-encoding", "connection"}
